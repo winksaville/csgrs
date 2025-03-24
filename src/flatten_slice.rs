@@ -151,23 +151,22 @@ impl<S: Clone + Debug> CSG<S> where S: Clone + Send + Sync {
     
     /// Checks if the CSG object is manifold.
     ///
-    /// This function defines a comparison function which takes EPSILON into account
-    /// for Real coordinates, builds a hashmap key from the string representation of
-    /// the coordinates, tessellates the CSG polygons, gathers each of their three edges,
-    /// counts how many times each edge appears across all triangles,
-    /// and returns true if every edge appears exactly 2 times, else false.
+    /// This function:
+    ///   1) Triangulates the shape.
+    ///   2) Gathers each triangle’s 3 edges and counts occurrences of each (using approximate ordering).
+    ///   3) Adjusts edges with count==1 if they’re collinear merges of other count==1 edges.
+    ///   4) Returns `true` if every edge ends with count==2, else `false`.
     ///
-    /// We should also check that all faces have consistent orientation and no neighbors
-    /// have flipped normals.
-    ///
-    /// We should also check for zero-area triangles
+    /// TODOs not fully implemented here:
+    ///   - Consistent orientation / no flipped neighbors
+    ///   - Zero-area triangle check
     ///
     /// # Returns
     ///
-    /// - `true`: If the CSG object is manifold.
+    /// - `true`: If the CSG object is manifold (all edges appear exactly 2 times).
     /// - `false`: If the CSG object is not manifold.
     pub fn is_manifold(&self) -> bool {
-        fn approx_lt(a: &Point3<Real>, b: &Point3<Real>) -> bool {
+        fn approx_lt(a: &Point3<f64>, b: &Point3<f64>) -> bool {
             // Compare x
             if (a.x - b.x).abs() > EPSILON {
                 return a.x < b.x;
@@ -180,36 +179,149 @@ impl<S: Clone + Debug> CSG<S> where S: Clone + Send + Sync {
             a.z < b.z
         }
 
-        // Turn a 3D point into a string with limited decimal places
-        fn point_key(p: &Point3<Real>) -> String {
+        // Convert a 3D point into a string with limited decimal places, to be used as a HashMap key
+        fn point_key(p: &Point3<f64>) -> String {
             // Truncate/round to e.g. 6 decimals
             format!("{:.6},{:.6},{:.6}", p.x, p.y, p.z)
         }
 
-        // Triangulate the whole shape once
+        // A small helper to restore a sorted (keyA, keyB) from two 3D points
+        fn make_edge_key(p0: &Point3<f64>, p1: &Point3<f64>) -> (String, String) {
+            if approx_lt(p0, p1) {
+                (point_key(p0), point_key(p1))
+            } else {
+                (point_key(p1), point_key(p0))
+            }
+        }
+
+        // Check whether three points are collinear, within EPSILON tolerance
+        fn collinear(p0: &Point3<f64>, p1: &Point3<f64>, p2: &Point3<f64>) -> bool {
+            // A simple way is to check the cross product of (p1 - p0) and (p2 - p0)
+            // If its magnitude is close to zero, they're collinear.
+            let v0 = p1 - p0;
+            let v1 = p2 - p0;
+            let cross = v0.cross(&v1);
+            cross.norm() < EPSILON
+        }
+
+        // Triangulate the whole shape
         let tri_csg = self.tessellate();
+
+        // First gather every directed edge, storing them in a map of (sortedKey) -> count
         let mut edge_counts: HashMap<(String, String), u32> = HashMap::new();
 
         for poly in &tri_csg.polygons {
-            // Each tri is 3 vertices: [v0, v1, v2]
-            // We'll look at edges (0->1, 1->2, 2->0).
+            // Each triangulated polygon has 3 vertices: [v0, v1, v2]
             for &(i0, i1) in &[(0, 1), (1, 2), (2, 0)] {
                 let p0 = &poly.vertices[i0].pos;
                 let p1 = &poly.vertices[i1].pos;
 
-                // Order them so (p0, p1) and (p1, p0) become the same key
-                let (a_key, b_key) = if approx_lt(&p0, &p1) {
-                    (point_key(&p0), point_key(&p1))
-                } else {
-                    (point_key(&p1), point_key(&p0))
-                };
+                // Sort so that (p0,p1) == (p1,p0) for hashing
+                let key = make_edge_key(p0, p1);
 
-                *edge_counts.entry((a_key, b_key)).or_insert(0) += 1;
+                *edge_counts.entry(key).or_insert(0) += 1;
             }
         }
 
-        // For a perfectly closed manifold surface (with no boundary),
+        //
+        // --- NEW STEP: attempt to "patch" edges that appear once by checking if they are collinear
+        // with another single-count edge, forming a larger single-count edge. If so, mark all 3 edges
+        // as count = 2.
+        //
+
+        // Collect all edges that have count == 1 along with their original Point3<f64> data.
+        // We’ll store them in a vector of ( (keyA, keyB), (pointA, pointB) ).
+        // That way we can easily iterate and find collinear neighbors.
+        let mut single_edges = Vec::new();
+        // Also keep a small helper map so we can quickly find the original points from a given key:
+        let mut key_to_points = HashMap::new();
+
+        // We'll need to re-generate the original points from each edge key. If you have them around
+        // you can store them more directly, but for demonstration we re-scan the polygons:
+        // (Alternatively, you could store them while building edge_counts in the first place.)
+
+        // Make a temporary structure (string -> Point3) for every vertex in tri_csg,
+        // so we can quickly map back from "x.xx,y.yy,z.zz" to a real Point3.
+        let mut vertex_map: HashMap<String, Point3<f64>> = HashMap::new();
+        for poly in &tri_csg.polygons {
+            for v in &poly.vertices {
+                let k = point_key(&v.pos);
+                // Overwrite duplicates, that's fine
+                vertex_map.insert(k, v.pos);
+            }
+        }
+
+        // Now fill single_edges and key_to_points
+        for ((k_a, k_b), &count) in &edge_counts {
+            if count == 1 {
+                if let (Some(p_a), Some(p_b)) = (vertex_map.get(k_a), vertex_map.get(k_b)) {
+                    single_edges.push(((k_a.clone(), k_b.clone()), (*p_a, *p_b)));
+                    key_to_points.insert((k_a.clone(), k_b.clone()), (*p_a, *p_b));
+                }
+            }
+        }
+
+        // Attempt to patch: for each pair of edges that share a common endpoint, check collinearity
+        // and see if the combined edge is also a single-count edge. If so, set all to count=2.
+        // We do this in a brute force manner; we might want a more efficient adjacency-based approach
+        for i in 0..single_edges.len() {
+            let ((k1a, k1b), (p1a, p1b)) = &single_edges[i];
+            // Skip if we already changed the count for that edge in a previous iteration
+            if edge_counts.get(&(k1a.clone(), k1b.clone())) != Some(&1) {
+                continue;
+            }
+
+            for j in (i + 1)..single_edges.len() {
+                let ((k2a, k2b), (p2a, p2b)) = &single_edges[j];
+                if edge_counts.get(&(k2a.clone(), k2b.clone())) != Some(&1) {
+                    continue;
+                }
+
+                // We want to see if these two edges share exactly one endpoint, and are collinear
+                // Suppose edge1 is (p1a, p1b), edge2 is (p2a, p2b).
+                // Identify the shared point, if any.
+                // Because ordering is not guaranteed (p1a could match p2b, etc.), we'll check all combos.
+                let combo = [
+                    (p1a, p1b, p2a, p2b),
+                    (p1a, p1b, p2b, p2a),
+                ];
+
+                let mut made_patch = false;
+                'combo_loop: for (e1a, e1b, e2a, e2b) in combo {
+                    // check if e1b == e2a is the shared point
+                    if (e1b - e2a).norm() < EPSILON {
+                        // They share e1b == e2a
+                        // Check collinearity about that point
+                        // e1a --- e1b/e2a --- e2b
+                        if collinear(e1b, e1a, e2b) {
+                            // The combined edge is (e1a, e2b), in sorted form
+                            let combined_key = make_edge_key(e1a, e2b);
+
+                            // If that combined edge has count == 1, we patch all of them to count=2
+                            if edge_counts.get(&combined_key) == Some(&1) {
+                                // Mark them as 2
+                                *edge_counts.get_mut(&(k1a.clone(), k1b.clone())).unwrap() = 2;
+                                *edge_counts.get_mut(&(k2a.clone(), k2b.clone())).unwrap() = 2;
+                                *edge_counts.get_mut(&combined_key).unwrap() = 2;
+                                made_patch = true;
+                                break 'combo_loop;
+                            }
+                        }
+                    }
+                }
+
+                // If we already patched using edges i, j, no need to check more combos
+                if made_patch {
+                    break;
+                }
+            }
+        }
+
+        println!("{:#?}", edge_counts);
+
+        // Finally, for a perfectly closed manifold surface (with no boundary),
         // each edge should appear exactly 2 times.
+        // Now that we've done the extra check for collinear merges, see if everything is 2:
         edge_counts.values().all(|&count| count == 2)
     }
 }
