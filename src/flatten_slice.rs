@@ -317,12 +317,29 @@ impl<S: Clone + Debug> CSG<S> where S: Clone + Send + Sync {
             }
         }
 
-        println!("{:#?}", edge_counts);
+        //println!("{:#?}", edge_counts);
 
         // Finally, for a perfectly closed manifold surface (with no boundary),
         // each edge should appear exactly 2 times.
         // Now that we've done the extra check for collinear merges, see if everything is 2:
-        edge_counts.values().all(|&count| count == 2)
+        //edge_counts.values().all(|&count| count == 2)
+
+        // show edges that non-two counts
+        let mut non_two_count = 0;
+        let total_edge_count = edge_counts.len();
+        for ((p0, p1), count) in edge_counts {
+            if count != 2 {
+                eprintln!("Edge {:?} -> {:?} appears {} time(s)", p0, p1, count);
+                non_two_count += 1;
+            }
+        }
+
+        if non_two_count != 0 {
+            eprintln!("non_two_count: {non_two_count} of {total_edge_count} edges");
+            false
+        } else {
+            true
+        }
     }
 }
 
