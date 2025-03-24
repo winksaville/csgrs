@@ -183,8 +183,14 @@ impl<S: Clone + Debug> CSG<S> where S: Clone + Send + Sync {
         // Turn a 3D point into a string with limited decimal places
         fn point_key(p: &Point3<Real>) -> String {
             // Truncate/round to e.g. 6 decimals
-            format!("{:.6},{:.6},{:.6}", p.x, p.y, p.z)
+            format!("{:.6},{:.6},{:.6}", p.x, p.y, p.z) // 20 non_two_count
+            //format!("{:.14},{:.14},{:.14}", p.x, p.y, p.z) // 20 non_two_count
+            //format!("{:.15},{:.15},{:.15}", p.x, p.y, p.z) // 26 non_two_count
+            //format!("{:.16},{:.16},{:.16}", p.x, p.y, p.z) // 30 non_two_count
+            //format!("{},{},{}", p.x, p.y, p.z) // 30 non_two_count
         }
+
+        eprintln!("EPSILON: {}", EPSILON);
 
         // Triangulate the whole shape once
         let tri_csg = self.tessellate();
@@ -210,7 +216,24 @@ impl<S: Clone + Debug> CSG<S> where S: Clone + Send + Sync {
 
         // For a perfectly closed manifold surface (with no boundary),
         // each edge should appear exactly 2 times.
-        edge_counts.values().all(|&count| count == 2)
+        //edge_counts.values().all(|&count| count == 2)
+
+        // show edges that non-two counts
+        let mut non_two_count = 0;
+        let total_edge_count = edge_counts.len();
+        for ((p0, p1), count) in edge_counts {
+            if count != 2 {
+                eprintln!("Edge {:?} -> {:?} appears {} time(s)", p0, p1, count);
+                non_two_count += 1;
+            }
+        }
+
+        if non_two_count != 0 {
+            eprintln!("non_two_count: {non_two_count} of {total_edge_count} edges");
+            false
+        } else {
+            true
+        }
     }
 }
 
