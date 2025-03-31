@@ -512,19 +512,19 @@ impl<S: Clone + Debug> CSG<S> where S: Clone + Send + Sync {
         //   [a   b   xoff]
         //   [d   e   yoff]
         //   [0   0    1  ]
-        let a    = mat[(0, 0)];
-        let b    = mat[(0, 1)];
-        let xoff = mat[(0, 3)];
-        let d    = mat[(1, 0)];
-        let e    = mat[(1, 1)];
-        let yoff = mat[(1, 3)];
-    
-        let affine2 = AffineTransform::new(a, b, xoff, d, e, yoff);
+        //let a    = mat[(0, 0)];
+        //let b    = mat[(0, 1)];
+        //let xoff = mat[(0, 3)];
+        //let d    = mat[(1, 0)];
+        //let e    = mat[(1, 1)];
+        //let yoff = mat[(1, 3)];
 
-        // 4) Transform csg.geometry (the GeometryCollection) in 2D
-        //    Using geo’s map-coords approach or the built-in AffineOps trait.
-        //    Below we use the `AffineOps` trait if you have `use geo::AffineOps;`
-        csg.geometry = csg.geometry.affine_transform(&affine2);
+        //let affine2 = AffineTransform::new(a, b, xoff, d, e, yoff);
+
+        //// 4) Transform csg.geometry (the GeometryCollection) in 2D
+        ////    Using geo’s map-coords approach or the built-in AffineOps trait.
+        ////    Below we use the `AffineOps` trait if you have `use geo::AffineOps;`
+        //csg.geometry = csg.geometry.affine_transform(&affine2);
 
         csg
     }
